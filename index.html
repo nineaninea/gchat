@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <title>💬 P2P 聊天室</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+            background: #f0f2f5;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 0;
+            padding: 12px;
+        }
+        #app {
+            max-width: 480px;
+            width: 100%;
+            height: 100%;
+            max-height: 800px;
+            background: white;
+            border-radius: 28px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.12);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .header {
+            padding: 16px 20px;
+            background: #7c3aed;
+            color: white;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        .header h1 { font-size: 18px; font-weight: 600; }
+        .header .user-info {
+            font-size: 13px;
+            opacity: 0.9;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        .header .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #4ade80;
+            display: inline-block;
+        }
+        .header .status-dot.offline { background: #f87171; }
+        .online-count {
+            background: rgba(255,255,255,0.2);
+            padding: 2px 12px;
+            border-radius: 30px;
+            font-size: 12px;
+        }
+        .server-name {
+            background: rgba(255,255,255,0.15);
+            padding: 2px 12px;
+            border-radius: 30px;
+            font-size: 11px;
+            max-width: 120px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .login-area {
+            padding: 30px 24px;
+            background: #f8fafc;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            flex-shrink: 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .login-area input {
+            padding: 12px 16px;
+            border: 2px solid #d1d9e6;
+            border-radius: 30px;
+            font-size: 15px;
+            outline: none;
+            transition: 0.2s;
+        }
+        .login-area input:focus { border-color: #7c3aed; }
+        .login-area button {
+            background: #7c3aed;
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 30px;
+            font-weight: 600;
+            font-size: 15px;
+            cursor: pointer;
+            transition: 0.15s;
+        }
+        .login-area button:active { transform: scale(0.97); background: #6d28d9; }
+        .login-area .hint {
+            font-size: 13px;
+            color: #64748b;
+            text-align: center;
+        }
+        .login-area .error-msg {
+            color: #ef4444;
+            font-size: 13px;
+            text-align: center;
+            display: none;
+            background: #fee2e2;
+            padding: 8px;
+            border-radius: 8px;
+        }
+        
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 16px 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            background: #ffffff;
+        }
+        .message {
+            max-width: 88%;
+            padding: 10px 14px;
+            border-radius: 16px;
+            font-size: 14px;
+            line-height: 1.5;
+            word-break: break-word;
+            background: #eef2f6;
+            color: #0f172a;
+            align-self: flex-start;
+            position: relative;
+        }
+        .message.mine {
+            background: #7c3aed;
+            color: white;
+            align-self: flex-end;
+        }
+        .message.system {
+            background: #f1f5f9;
+            color: #475569;
+            font-size: 13px;
+            text-align: center;
+            align-self: center;
+            max-width: 90%;
+            border-radius: 30px;
+            padding: 6px 16px;
+        }
+        .message.error {
+            background: #fee2e2;
+            color: #991b1b;
+            font-size: 13px;
+            text-align: center;
+            align-self: center;
+            max-width: 90%;
+            border-radius: 30px;
+            padding: 6px 16px;
+        }
+        .message .sender {
+            font-weight: 600;
+            font-size: 13px;
+            margin-bottom: 2px;
+            display: block;
+        }
+        .message.mine .sender { color: rgba(255,255,255,0.8); }
+        .message .time {
+            font-size: 10px;
+            opacity: 0.6;
+            margin-top: 4px;
+            display: block;
+            text-align: right;
+        }
+        
+        .input-area {
+            padding: 10px 16px 16px;
+            background: white;
+            border-top: 1px solid #e2e8f0;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        .input-area input[type="text"] {
+            flex: 1;
+            padding: 10px 16px;
+            border: 2px solid #d1d9e6;
+            border-radius: 30px;
+            font-size: 14px;
+            outline: none;
+            background: #f8fafc;
+            transition: 0.2s;
+        }
+        .input-area input[type="text"]:focus {
+            border-color: #7c3aed;
+            background: white;
+        }
+        .input-area button {
+            background: #7c3aed;
+            color: white;
+            border: none;
+            padding: 10px 24px;
+            border-radius: 30px;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .input-area button:active { background: #6d28d9; }
+        .input-area button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .hidden { display: none; }
+        .status-msg {
+            text-align: center;
+            padding: 8px;
+            font-size: 13px;
+            color: #64748b;
+            background: #f8fafc;
+        }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <div class="header">
+        <h1>💬 P2P 群聊</h1>
+        <div class="user-info">
+            <span class="status-dot offline" id="statusDot"></span>
+            <span id="userIdDisplay">未登录</span>
+            <span class="online-count" id="onlineCount">👥 0</span>
+            <span class="server-name" id="serverNameDisplay">📡 连接中...</span>
+        </div>
+    </div>
+
+    <div class="login-area" id="loginArea">
+        <input type="text" id="serverNameInput" placeholder="服务器名称 (如: chat-server)">
+        <input type="text" id="userNameInput" placeholder="你的名字 (如: Alice)" maxlength="20">
+        <button id="loginBtn">🚀 连接到服务器</button>
+        <div class="error-msg" id="errorMsg"></div>
+        <div class="hint">💡 确保服务器已启动，名称完全匹配</div>
+    </div>
+
+    <div class="chat-container" id="chatContainer">
+        <div class="status-msg" id="statusMsg">💡 输入服务器名称和你的名字，然后点击连接</div>
+    </div>
+
+    <div class="input-area" id="inputArea">
+        <input type="text" id="msgInput" placeholder="输入消息..." disabled>
+        <button id="sendBtn" disabled>发送</button>
+    </div>
+</div>
+
+<script>
+    // ============ DOM 引用 ============
+    const serverNameInput = document.getElementById('serverNameInput');
+    const userNameInput = document.getElementById('userNameInput');
+    const loginBtn = document.getElementById('loginBtn');
+    const chatContainer = document.getElementById('chatContainer');
+    const msgInput = document.getElementById('msgInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const userIdDisplay = document.getElementById('userIdDisplay');
+    const statusDot = document.getElementById('statusDot');
+    const onlineCount = document.getElementById('onlineCount');
+    const serverNameDisplay = document.getElementById('serverNameDisplay');
+    const loginArea = document.getElementById('loginArea');
+    const errorMsg = document.getElementById('errorMsg');
+    const statusMsg = document.getElementById('statusMsg');
+
+    // ============ 状态 ============
+    let ws = null;
+    let myName = null;
+    let serverName = null;
+    let isConnected = false;
+    let reconnectTimer = null;
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 3;
+
+    // ============ WebSocket 服务器地址 ============
+    // 使用 localhost 或 127.0.0.1
+    const WS_URL = 'ws://127.0.0.1:8765';
+
+    // ============ UI 辅助 ============
+    function addMessage(sender, content, time, isMine = false, isSystem = false, isError = false) {
+        // 移除状态提示
+        if (statusMsg) statusMsg.style.display = 'none';
+        
+        const div = document.createElement('div');
+        div.className = `message`;
+        
+        if (isSystem) {
+            div.classList.add('system');
+            div.textContent = content;
+        } else if (isError) {
+            div.classList.add('error');
+            div.textContent = content;
+        } else {
+            if (isMine) div.classList.add('mine');
+            const senderSpan = document.createElement('span');
+            senderSpan.className = 'sender';
+            senderSpan.textContent = sender;
+            div.appendChild(senderSpan);
+            const contentSpan = document.createElement('span');
+            contentSpan.textContent = content;
+            div.appendChild(contentSpan);
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'time';
+            timeSpan.textContent = time || new Date().toLocaleTimeString();
+            div.appendChild(timeSpan);
+        }
+        
+        chatContainer.appendChild(div);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        return div;
+    }
+
+    function showError(msg) {
+        errorMsg.textContent = '❌ ' + msg;
+        errorMsg.style.display = 'block';
+        console.error('Error:', msg);
+    }
+
+    function hideError() {
+        errorMsg.style.display = 'none';
+    }
+
+    function updateStatus(online) {
+        statusDot.className = 'status-dot ' + (online ? '' : 'offline');
+        userIdDisplay.textContent = online ? myName : '未登录';
+        if (online && serverName) {
+            serverNameDisplay.textContent = '📡 ' + serverName;
+        } else {
+            serverNameDisplay.textContent = '📡 断开连接';
+        }
+    }
+
+    function updateOnlineCount(count) {
+        onlineCount.textContent = '👥 ' + count;
+    }
+
+    function setInputEnabled(enabled) {
+        msgInput.disabled = !enabled;
+        sendBtn.disabled = !enabled;
+        if (enabled) {
+            msgInput.focus();
+        }
+    }
+
+    // ============ WebSocket 连接 ============
+
+    function connectToServer(server, userName) {
+        // 关闭现有连接
+        if (ws) {
+            try {
+                ws.close();
+            } catch(e) {}
+            ws = null;
+        }
+        
+        hideError();
+        setInputEnabled(false);
+        updateStatus(false);
+        
+        // 显示连接状态
+        addMessage('系统', `🔄 正在连接到服务器 "${server}"...`, '', false, true);
+        
+        try {
+            ws = new WebSocket(WS_URL);
+            
+            ws.onopen = function() {
+                console.log('WebSocket 连接已建立');
+                // 发送连接请求到服务器节点
+                const msg = {
+                    type: 'connect_to_server',
+                    server_name: server,
+                    user_name: userName
+                };
+                console.log('发送连接请求:', msg);
+                ws.send(JSON.stringify(msg));
+            };
+            
+            ws.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('收到消息:', data);
+                    handleMessage(data);
+                } catch (e) {
+                    console.error('解析消息失败:', e);
+                    addMessage('系统', '⚠️ 收到无效消息', '', false, true);
+                }
+            };
+            
+            ws.onclose = function(event) {
+                console.log('WebSocket 连接关闭:', event.code, event.reason);
+                isConnected = false;
+                setInputEnabled(false);
+                updateStatus(false);
+                
+                if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    reconnectAttempts++;
+                    addMessage('系统', `🔄 连接断开，${reconnectAttempts}秒后重试... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`, '', false, true);
+                    
+                    if (reconnectTimer) clearTimeout(reconnectTimer);
+                    reconnectTimer = setTimeout(() => {
+                        if (myName && serverName) {
+                            connectToServer(serverName, myName);
+                        }
+                    }, reconnectAttempts * 2000);
+                } else {
+                    addMessage('系统', '❌ 重连失败，请检查服务器是否运行', '', false, true);
+                    reconnectAttempts = 0;
+                    // 显示登录界面
+                    loginArea.style.display = 'block';
+                }
+            };
+            
+            ws.onerror = function(error) {
+                console.error('WebSocket 错误:', error);
+                showError('连接失败，请确保服务器已启动');
+                addMessage('系统', '❌ 连接错误，请检查服务器是否运行在 ws://127.0.0.1:8765', '', false, true);
+            };
+            
+        } catch (e) {
+            console.error('创建 WebSocket 失败:', e);
+            showError('无法创建连接: ' + e.message);
+            addMessage('系统', '❌ 连接失败: ' + e.message, '', false, true);
+        }
+    }
+
+    // ============ 消息处理 ============
+
+    function handleMessage(data) {
+        switch(data.type) {
+            case 'server_connected':
+                myName = userNameInput.value.trim();
+                serverName = serverNameInput.value.trim();
+                isConnected = true;
+                reconnectAttempts = 0;
+                updateStatus(true);
+                setInputEnabled(true);
+                loginArea.style.display = 'none';
+                addMessage('系统', data.content, '', false, true);
+                addMessage('系统', '💡 输入消息，所有在线用户都能看到', '', false, true);
+                console.log('✅ 连接成功!');
+                break;
+                
+            case 'error':
+                showError(data.content);
+                addMessage('系统', data.content, '', false, false, true);
+                // 如果是服务器名称不匹配，保持登录界面可见
+                if (data.content.includes('服务器名称不匹配')) {
+                    loginArea.style.display = 'block';
+                    updateStatus(false);
+                }
+                break;
+                
+            case 'history':
+                if (data.messages && data.messages.length > 0) {
+                    addMessage('系统', `📜 加载 ${data.messages.length} 条历史消息`, '', false, true);
+                    data.messages.forEach(msg => {
+                        const isMine = (msg.sender === myName);
+                        const isSystem = (msg.sender === '系统');
+                        addMessage(msg.sender, msg.content, msg.time, isMine, isSystem);
+                    });
+                }
+                break;
+                
+            case 'text':
+                const isMine = (data.sender === myName);
+                const isSystem = (data.sender === '系统');
+                addMessage(data.sender, data.content, data.time, isMine, isSystem);
+                break;
+                
+            case 'system':
+                addMessage('系统', data.content, data.time || new Date().toLocaleTimeString(), false, true);
+                break;
+                
+            case 'online_count':
+                updateOnlineCount(data.count);
+                break;
+                
+            case 'pong':
+                console.log('心跳响应');
+                break;
+                
+            default:
+                console.log('未知消息类型:', data);
+        }
+    }
+
+    // ============ 发送消息 ============
+
+    function sendMessage(text) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            addMessage('系统', '⚠️ 未连接到服务器', '', false, true);
+            return;
+        }
+        if (!text.trim()) return;
+        
+        ws.send(JSON.stringify({
+            type: 'text',
+            content: text.trim()
+        }));
+        
+        // 本地立即显示
+        addMessage(myName, text.trim(), new Date().toLocaleTimeString(), true);
+    }
+
+    // ============ 事件绑定 ============
+
+    loginBtn.addEventListener('click', function() {
+        const server = serverNameInput.value.trim();
+        const userName = userNameInput.value.trim();
+        
+        if (!server) {
+            showError('请输入服务器名称');
+            serverNameInput.focus();
+            return;
+        }
+        if (!userName) {
+            showError('请输入你的名字');
+            userNameInput.focus();
+            return;
+        }
+        if (userName.length > 20) {
+            showError('名字最长20位');
+            userNameInput.focus();
+            return;
+        }
+        
+        // 清空历史消息
+        chatContainer.innerHTML = '';
+        // 重新添加状态提示
+        const statusDiv = document.createElement('div');
+        statusDiv.className = 'status-msg';
+        statusDiv.id = 'statusMsg';
+        statusDiv.textContent = '🔄 正在连接...';
+        chatContainer.appendChild(statusDiv);
+        
+        hideError();
+        reconnectAttempts = 0;
+        connectToServer(server, userName);
+    });
+
+    // 回车键触发登录
+    userNameInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') loginBtn.click();
+    });
+    serverNameInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') loginBtn.click();
+    });
+
+    // 发送消息
+    sendBtn.addEventListener('click', function() {
+        const text = msgInput.value.trim();
+        if (text) {
+            sendMessage(text);
+            msgInput.value = '';
+        }
+    });
+
+    msgInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            sendBtn.click();
+        }
+    });
+
+    // ============ 初始化 ============
+    console.log('💬 P2P 聊天室客户端已加载');
+    console.log('📡 服务器地址:', WS_URL);
+    console.log('💡 请输入服务器名称和你的名字进行连接');
+    
+    // 设置默认值方便测试
+    serverNameInput.value = 'chat-server';
+    userNameInput.value = 'user-' + Math.random().toString(36).substr(2, 4);
+    
+    // 聚焦到服务器名称输入框
+    serverNameInput.focus();
+</script>
+</body>
+</html>
