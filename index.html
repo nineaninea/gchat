@@ -6,7 +6,6 @@
     <title>💬 PeerJS 节点 (二合一)</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        /* ... 样式与之前相同，不变 ... */
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: system-ui, sans-serif;
@@ -106,7 +105,6 @@
         .server-controls .btn-group { display: flex; gap: 6px; }
         .btn-primary { background: #3b82f6; color: white; border: none; padding: 6px 16px; border-radius: 30px; font-weight: 600; cursor: pointer; }
         .btn-danger { background: #ef4444; color: white; border: none; padding: 6px 16px; border-radius: 30px; font-weight: 600; cursor: pointer; }
-        .btn-success { background: #22c55e; }
         .btn-primary:disabled, .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
 
         .server-status {
@@ -241,11 +239,11 @@
             color: #64748b;
         }
         .login-area {
-            padding: 20px 20px 16px;
+            padding: 16px 20px 12px;
             background: #f8fafc;
             display: flex;
             flex-direction: column;
-            gap: 12px;
+            gap: 10px;
             flex-shrink: 0;
             border-bottom: 1px solid #e2e8f0;
         }
@@ -284,8 +282,29 @@
             color: #4338ca;
             text-align: center;
         }
+        .client-toolbar {
+            padding: 8px 20px;
+            background: #f8fafc;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-shrink: 0;
+            font-size: 14px;
+            color: #0f172a;
+        }
+        .client-toolbar label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+        }
+        .client-toolbar input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
         .hidden { display: none; }
-        .flex-grow { flex: 1; }
     </style>
 </head>
 <body>
@@ -305,7 +324,7 @@
         <!-- 服务器面板 -->
         <div class="tab-pane active" id="serverPane">
             <div class="server-controls">
-                <input type="text" id="serverNameInput" placeholder="服务器节点名称" value="chat-server">
+                <input type="text" id="serverNameInput" placeholder="服务器节点名称（必填）" value="">
                 <div class="btn-group">
                     <button class="btn-primary" id="startServerBtn">▶ 启动</button>
                     <button class="btn-danger" id="stopServerBtn" disabled>⏹ 停止</button>
@@ -329,11 +348,18 @@
         <!-- 客户端面板 -->
         <div class="tab-pane" id="clientPane">
             <div class="login-area" id="clientLoginArea">
-                <input type="text" id="clientServerName" placeholder="服务器节点名称" value="chat-server">
-                <input type="text" id="clientUserName" placeholder="你的昵称" maxlength="20">
+                <input type="text" id="clientServerName" placeholder="服务器节点名称（必填）" value="">
+                <input type="text" id="clientUserName" placeholder="你的昵称（必填）" maxlength="20" value="">
                 <button id="clientConnectBtn">🔗 连接</button>
                 <div class="error-msg" id="clientError"></div>
                 <div class="info">🌐 通过公共信令服务器 (0.peerjs.com)</div>
+            </div>
+            <div class="client-toolbar">
+                <label>
+                    <input type="checkbox" id="showSystemMsg" checked>
+                    显示加入/离开消息
+                </label>
+                <span style="font-size:12px;color:#64748b;">(仅对当前会话生效)</span>
             </div>
             <div class="chat-container" id="clientChatContainer">
                 <div class="status-msg">请先连接服务器</div>
@@ -350,25 +376,35 @@
     // ============================================================
     // 全局配置
     // ============================================================
-    const STORAGE_KEY = 'peerjs_chat_history';
+    const STORAGE_KEY = 'peerjs_chat_history';  // 所有节点共享
     const MAX_HISTORY = 50;
-    const HEARTBEAT_INTERVAL = 10000; // 10秒发送一次 ping
-    const HEARTBEAT_TIMEOUT = 30000;  // 30秒无响应则踢出
 
     // ============================================================
-    // 工具函数
+    // 历史消息操作（共享存储）
     // ============================================================
     function getHistory() {
-        try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; }
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            return raw ? JSON.parse(raw) : [];
+        } catch { return []; }
     }
-    function saveHistory(history) { localStorage.setItem(STORAGE_KEY, JSON.stringify(history)); }
+    function saveHistory(history) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
+    }
     function addHistory(sender, content, timestamp, time) {
         const h = getHistory();
         h.push({ sender, content, timestamp, time });
         if (h.length > 500) h.splice(0, h.length - 500);
         saveHistory(h);
     }
-    function getRecent(limit = MAX_HISTORY) { const h = getHistory(); return h.slice(-limit); }
+    function getRecent(limit = MAX_HISTORY) {
+        const h = getHistory();
+        return h.slice(-limit);
+    }
+    function clearHistory() {
+        localStorage.removeItem(STORAGE_KEY);
+    }
+
     function fmtTime() { return new Date().toLocaleTimeString(); }
     function fmtTimestamp() { return new Date().toISOString(); }
 
@@ -397,35 +433,71 @@
     const clientChat = document.getElementById('clientChatContainer');
     const clientMsgInput = document.getElementById('clientMsgInput');
     const clientSendBtn = document.getElementById('clientSendBtn');
+    const showSystemMsg = document.getElementById('showSystemMsg');
 
     // ============================================================
-    // 渲染辅助
+    // 客户端消息渲染
     // ============================================================
-    function renderMsg(container, sender, content, time, isMine = false, isSystem = false) {
-        const div = document.createElement('div');
-        div.className = 'message';
-        if (isSystem) {
-            div.classList.add('system');
-            div.textContent = content;
-        } else {
-            if (isMine) div.classList.add('mine');
-            const s = document.createElement('span');
-            s.className = 'sender';
-            s.textContent = sender;
-            div.appendChild(s);
-            const c = document.createElement('span');
-            c.textContent = content;
-            div.appendChild(c);
-            const t = document.createElement('span');
-            t.className = 'time';
-            t.textContent = time || fmtTime();
-            div.appendChild(t);
+    let clientAllMessages = [];
+
+    function renderClientMessages() {
+        const container = clientChat;
+        while (container.firstChild) container.removeChild(container.firstChild);
+        if (clientAllMessages.length === 0) {
+            const div = document.createElement('div');
+            div.className = 'status-msg';
+            div.textContent = '暂无消息，开始聊天吧！';
+            container.appendChild(div);
+            return;
         }
-        container.appendChild(div);
+
+        const showSys = showSystemMsg.checked;
+        for (const msg of clientAllMessages) {
+            const isSystem = (msg.sender === '系统');
+            if (isSystem) {
+                if (!showSys) {
+                    const content = msg.content || '';
+                    if (content.includes('加入了聊天室') || content.includes('离开了聊天室')) {
+                        continue;
+                    }
+                }
+            }
+            const div = document.createElement('div');
+            div.className = 'message';
+            if (isSystem) {
+                div.classList.add('system');
+                div.textContent = msg.content;
+            } else {
+                if (msg.isMine) div.classList.add('mine');
+                const s = document.createElement('span');
+                s.className = 'sender';
+                s.textContent = msg.sender;
+                div.appendChild(s);
+                const c = document.createElement('span');
+                c.textContent = msg.content;
+                div.appendChild(c);
+                const t = document.createElement('span');
+                t.className = 'time';
+                t.textContent = msg.time || fmtTime();
+                div.appendChild(t);
+            }
+            container.appendChild(div);
+        }
         container.scrollTop = container.scrollHeight;
     }
 
-    function setStatus(container, msg) {
+    function addClientMessage(sender, content, time, isMine = false) {
+        clientAllMessages.push({ sender, content, time, isMine });
+        renderClientMessages();
+    }
+
+    function clearClientMessages() {
+        clientAllMessages = [];
+        renderClientMessages();
+    }
+
+    function setClientStatus(msg) {
+        const container = clientChat;
         container.innerHTML = '';
         const div = document.createElement('div');
         div.className = 'status-msg';
@@ -434,13 +506,11 @@
     }
 
     // ============================================================
-    // 服务器逻辑（改进）
+    // 服务器逻辑
     // ============================================================
     let serverPeer = null;
-    let serverConnections = new Map(); // peerId -> { conn, userName, lastPong }
+    let serverConnections = new Map();
     let serverStarted = false;
-    let heartbeatTimer = null;
-    let serverName = '';
 
     function updateServerUI() {
         onlineCount.textContent = serverConnections.size;
@@ -463,55 +533,14 @@
         console.log(`📤 广播给 ${count} 个客户端`);
     }
 
-    function startHeartbeat() {
-        if (heartbeatTimer) clearInterval(heartbeatTimer);
-        heartbeatTimer = setInterval(() => {
-            const now = Date.now();
-            const toRemove = [];
-            // 发送 ping
-            for (const [pid, info] of serverConnections) {
-                try {
-                    info.conn.send(JSON.stringify({ type: 'ping' }));
-                } catch (e) {
-                    // 发送失败，可能已断开
-                    toRemove.push(pid);
-                }
-            }
-            // 检查超时
-            for (const [pid, info] of serverConnections) {
-                if (info.lastPong && (now - info.lastPong) > HEARTBEAT_TIMEOUT) {
-                    toRemove.push(pid);
-                }
-            }
-            // 移除超时或发送失败的客户端
-            toRemove.forEach(pid => {
-                if (serverConnections.has(pid)) {
-                    const info = serverConnections.get(pid);
-                    console.log(`⏰ 客户端 ${info.userName} (${pid}) 心跳超时，断开`);
-                    try { info.conn.close(); } catch (e) {}
-                    serverConnections.delete(pid);
-                    // 广播离开消息
-                    const leave = `🔴 ${info.userName} 因超时离开聊天室`;
-                    addHistory('系统', leave, fmtTimestamp(), fmtTime());
-                    broadcast('系统', leave, fmtTimestamp(), fmtTime());
-                    renderMsg(serverChat, '系统', leave, fmtTime(), false, true);
-                    updateServerUI();
-                }
-            });
-        }, HEARTBEAT_INTERVAL);
-    }
-
-    function stopHeartbeat() {
-        if (heartbeatTimer) {
-            clearInterval(heartbeatTimer);
-            heartbeatTimer = null;
-        }
-    }
-
     function startServer() {
         if (serverStarted) return;
-        serverName = serverNameInput.value.trim();
-        if (!serverName) { alert('请输入服务器节点名称'); return; }
+        const name = serverNameInput.value.trim();
+        if (!name) {
+            alert('请先输入服务器节点名称');
+            serverNameInput.focus();
+            return;
+        }
 
         if (serverPeer) { serverPeer.destroy(); serverPeer = null; }
 
@@ -523,7 +552,7 @@
         serverStatusBadge.textContent = '注册中...';
         serverStatusBadge.className = 'status-badge off';
 
-        serverPeer = new Peer(serverName, {
+        serverPeer = new Peer(name, {
             debug: 2,
             config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] }
         });
@@ -537,9 +566,7 @@
             startServerBtn.disabled = true;
             serverMsgInput.disabled = false;
             serverSendBtn.disabled = false;
-            setStatus(serverChat, '服务器已启动，等待客户端连接...');
-            // 启动心跳
-            startHeartbeat();
+            setServerStatus('服务器已启动，等待客户端连接...');
         });
 
         serverPeer.on('connection', (conn) => {
@@ -550,43 +577,31 @@
             const handler = (data) => {
                 try {
                     const msg = JSON.parse(data);
-                    // 处理心跳回复
-                    if (msg.type === 'pong') {
-                        if (serverConnections.has(conn.peer)) {
-                            serverConnections.get(conn.peer).lastPong = Date.now();
-                        }
-                        return;
-                    }
-
                     if (msg.type === 'login' && !loggedIn) {
                         userName = msg.userName || '匿名用户';
                         loggedIn = true;
-                        // 如果已存在相同 peerId，先移除旧记录
-                        if (serverConnections.has(conn.peer)) {
-                            // 可能有重复，先清理
-                            serverConnections.delete(conn.peer);
-                        }
-                        serverConnections.set(conn.peer, { conn, userName, lastPong: Date.now() });
+                        serverConnections.set(conn.peer, { conn, userName });
                         updateServerUI();
 
-                        // 登录成功
                         conn.send(JSON.stringify({
                             type: 'login_success',
-                            serverName: serverName,
-                            content: `✅ 连接到 ${serverName}`
+                            serverName: name,
+                            content: `✅ 连接到 ${name}`
                         }));
 
-                        // 推送历史
+                        // 推送历史（包含所有消息，包括通知）
                         const history = getRecent(MAX_HISTORY);
                         if (history.length) {
                             conn.send(JSON.stringify({ type: 'history', messages: history }));
                         }
 
-                        // 广播加入
+                        // 广播加入并存储
                         const sysMsg = `🟢 ${userName} 加入了聊天室`;
-                        addHistory('系统', sysMsg, fmtTimestamp(), fmtTime());
-                        broadcast('系统', sysMsg, fmtTimestamp(), fmtTime(), conn.peer);
-                        renderMsg(serverChat, '系统', sysMsg, fmtTime(), false, true);
+                        const ts = fmtTimestamp();
+                        const tm = fmtTime();
+                        addHistory('系统', sysMsg, ts, tm);   // 存储
+                        broadcast('系统', sysMsg, ts, tm, conn.peer);
+                        renderServerMsg('系统', sysMsg, tm, false, true);
                         updateServerUI();
                     }
                     else if (msg.type === 'text' && loggedIn) {
@@ -594,9 +609,9 @@
                         if (!content) return;
                         const ts = fmtTimestamp();
                         const tm = fmtTime();
-                        addHistory(userName, content, ts, tm);
+                        addHistory(userName, content, ts, tm);  // 存储普通消息
                         broadcast(userName, content, ts, tm);
-                        renderMsg(serverChat, userName, content, tm, false);
+                        renderServerMsg(userName, content, tm, false);
                     }
                 } catch (e) { console.error('处理消息失败:', e); }
             };
@@ -606,9 +621,11 @@
                 if (serverConnections.has(conn.peer)) {
                     const info = serverConnections.get(conn.peer);
                     const leave = `🔴 ${info.userName} 离开了聊天室`;
-                    addHistory('系统', leave, fmtTimestamp(), fmtTime());
-                    broadcast('系统', leave, fmtTimestamp(), fmtTime());
-                    renderMsg(serverChat, '系统', leave, fmtTime(), false, true);
+                    const ts = fmtTimestamp();
+                    const tm = fmtTime();
+                    addHistory('系统', leave, ts, tm);   // 存储离开通知
+                    broadcast('系统', leave, ts, tm);
+                    renderServerMsg('系统', leave, tm, false, true);
                     serverConnections.delete(conn.peer);
                     updateServerUI();
                 }
@@ -642,9 +659,16 @@
 
     function stopServer() {
         if (!serverStarted || !serverPeer) return;
+
+        // 询问是否清空所有历史记录（共享存储）
+        const shouldClear = confirm('是否清空所有历史消息？（所有节点共享的历史将被清除）');
+        if (shouldClear) {
+            clearHistory();
+            console.log('🗑️ 已清空全部历史记录');
+            renderServerMsg('系统', '🗑️ 全部历史记录已清空', fmtTime(), false, true);
+        }
+
         console.log('⏹ 停止服务器...');
-        stopHeartbeat();
-        // 断开所有客户端
         for (const [pid, info] of serverConnections) {
             try { info.conn.close(); } catch (e) {}
         }
@@ -662,12 +686,45 @@
         serverNameInput.disabled = false;
         serverMsgInput.disabled = true;
         serverSendBtn.disabled = true;
-        setStatus(serverChat, '服务器已停止');
+        setServerStatus('服务器已停止');
         updateServerUI();
     }
 
+    // 服务器聊天渲染
+    function renderServerMsg(sender, content, time, isMine = false, isSystem = false) {
+        const div = document.createElement('div');
+        div.className = 'message';
+        if (isSystem) {
+            div.classList.add('system');
+            div.textContent = content;
+        } else {
+            if (isMine) div.classList.add('mine');
+            const s = document.createElement('span');
+            s.className = 'sender';
+            s.textContent = sender;
+            div.appendChild(s);
+            const c = document.createElement('span');
+            c.textContent = content;
+            div.appendChild(c);
+            const t = document.createElement('span');
+            t.className = 'time';
+            t.textContent = time || fmtTime();
+            div.appendChild(t);
+        }
+        serverChat.appendChild(div);
+        serverChat.scrollTop = serverChat.scrollHeight;
+    }
+
+    function setServerStatus(msg) {
+        serverChat.innerHTML = '';
+        const div = document.createElement('div');
+        div.className = 'status-msg';
+        div.textContent = msg;
+        serverChat.appendChild(div);
+    }
+
     // ============================================================
-    // 客户端逻辑（修复消息重复）
+    // 客户端逻辑
     // ============================================================
     let clientPeer = null;
     let clientConn = null;
@@ -680,7 +737,8 @@
         clientConnected = false;
         clientMsgInput.disabled = true;
         clientSendBtn.disabled = true;
-        setStatus(clientChat, '🔄 连接中...');
+        clearClientMessages();
+        setClientStatus('🔄 连接中...');
 
         const cid = 'client-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6);
         clientPeer = new Peer(cid, {
@@ -698,25 +756,14 @@
             });
 
             clientConn.on('data', (data) => {
-                try {
-                    const msg = JSON.parse(data);
-                    // 处理心跳
-                    if (msg.type === 'ping') {
-                        // 回复 pong
-                        if (clientConn && clientConn.open) {
-                            clientConn.send(JSON.stringify({ type: 'pong' }));
-                        }
-                        return;
-                    }
-                    handleClientMessage(msg);
-                } catch (e) { console.error('解析失败:', e); }
+                try { handleClientMessage(JSON.parse(data)); } catch (e) { console.error('解析失败:', e); }
             });
 
             clientConn.on('close', () => {
                 clientConnected = false;
                 clientMsgInput.disabled = true;
                 clientSendBtn.disabled = true;
-                setStatus(clientChat, '🔌 连接已断开');
+                setClientStatus('🔌 连接已断开');
                 document.getElementById('clientLoginArea').style.display = 'block';
             });
 
@@ -731,20 +778,16 @@
             console.error('客户端 Peer 错误:', err);
             if (err.type === 'peer-unavailable') {
                 showClientError(`服务器 "${serverName}" 不存在`);
-                setStatus(clientChat, `❌ 服务器 "${serverName}" 不存在`);
+                setClientStatus(`❌ 服务器 "${serverName}" 不存在`);
             } else {
                 showClientError('连接失败: ' + err.message);
-                setStatus(clientChat, '❌ 连接失败');
+                setClientStatus('❌ 连接失败');
             }
             document.getElementById('clientLoginArea').style.display = 'block';
         });
     }
 
     function handleClientMessage(msg) {
-        // 忽略自己发送的消息（由本地直接显示，避免重复）
-        if (msg.sender === clientMyName) {
-            return;
-        }
         switch (msg.type) {
             case 'login_success':
                 clientConnected = true;
@@ -752,25 +795,51 @@
                 clientMsgInput.disabled = false;
                 clientSendBtn.disabled = false;
                 document.getElementById('clientLoginArea').style.display = 'none';
-                clientChat.innerHTML = '';
-                renderMsg(clientChat, '系统', '✅ ' + msg.content, fmtTime(), false, true);
-                renderMsg(clientChat, '系统', '💡 开始聊天！', fmtTime(), false, true);
+                clearClientMessages();
+                // 显示欢迎消息（系统消息，不受开关影响）
+                const container = clientChat;
+                const div = document.createElement('div');
+                div.className = 'message system';
+                div.textContent = '✅ ' + msg.content;
+                container.appendChild(div);
+                const div2 = document.createElement('div');
+                div2.className = 'message system';
+                div2.textContent = '💡 开始聊天！';
+                container.appendChild(div2);
                 break;
             case 'history':
                 if (msg.messages && msg.messages.length) {
-                    renderMsg(clientChat, '系统', `📜 加载 ${msg.messages.length} 条历史`, fmtTime(), false, true);
-                    msg.messages.forEach(m => {
-                        // 历史消息如果包含自己的，也正常显示（因为历史中可能包含自己之前发的，但那是过去的，可显示）
-                        const isMine = (m.sender === clientMyName);
-                        const isSystem = (m.sender === '系统');
-                        renderMsg(clientChat, m.sender, m.content, m.time, isMine, isSystem);
-                    });
+                    for (const m of msg.messages) {
+                        // 所有消息都加入（包括系统通知），客户端开关控制显示
+                        clientAllMessages.push({
+                            sender: m.sender,
+                            content: m.content,
+                            time: m.time,
+                            isMine: (m.sender === clientMyName)
+                        });
+                    }
+                    renderClientMessages();
                 }
                 break;
             case 'text':
-                const isMine = (msg.sender === clientMyName);
+                // 如果是自己发的，跳过（已本地显示）
+                if (msg.sender === clientMyName) return;
                 const isSystem = (msg.sender === '系统');
-                renderMsg(clientChat, msg.sender, msg.content, msg.time, isMine, isSystem);
+                if (isSystem) {
+                    if (!showSystemMsg.checked) {
+                        const content = msg.content || '';
+                        if (content.includes('加入了聊天室') || content.includes('离开了聊天室')) {
+                            return;
+                        }
+                    }
+                }
+                clientAllMessages.push({
+                    sender: msg.sender,
+                    content: msg.content,
+                    time: msg.time,
+                    isMine: false
+                });
+                renderClientMessages();
                 break;
             default: break;
         }
@@ -813,7 +882,7 @@
         const tm = fmtTime();
         addHistory('系统', `📢 ${text}`, ts, tm);
         broadcast('系统', `📢 ${text}`, ts, tm);
-        renderMsg(serverChat, '系统', `📢 ${text}`, tm, false, true);
+        renderServerMsg('系统', `📢 ${text}`, tm, false, true);
         serverMsgInput.value = '';
     });
 
@@ -822,8 +891,8 @@
     clientConnectBtn.addEventListener('click', function() {
         const server = clientServerName.value.trim();
         const userName = clientUserName.value.trim();
-        if (!server) { showClientError('请输入服务器名称'); return; }
-        if (!userName) { showClientError('请输入昵称'); return; }
+        if (!server) { showClientError('请输入服务器节点名称'); clientServerName.focus(); return; }
+        if (!userName) { showClientError('请输入你的昵称'); clientUserName.focus(); return; }
         if (userName.length > 20) { showClientError('昵称最长20位'); return; }
         clientError.style.display = 'none';
         connectAsClient(server, userName);
@@ -835,8 +904,9 @@
     clientSendBtn.addEventListener('click', function() {
         const text = clientMsgInput.value.trim();
         if (!text || !clientConnected || !clientConn) return;
+        const tm = fmtTime();
+        addClientMessage(clientMyName, text, tm, true);
         clientConn.send(JSON.stringify({ type: 'text', content: text }));
-        renderMsg(clientChat, clientMyName, text, fmtTime(), true);
         clientMsgInput.value = '';
     });
 
@@ -844,13 +914,15 @@
         if (e.key === 'Enter') { e.preventDefault(); clientSendBtn.click(); }
     });
 
+    showSystemMsg.addEventListener('change', function() {
+        renderClientMessages();
+    });
+
     // ============================================================
-    // 双向同步服务器名称
+    // 同步服务器名称到客户端默认值（双向）
     // ============================================================
     serverNameInput.addEventListener('input', function() {
-        if (!serverNameInput.disabled) {
-            clientServerName.value = this.value;
-        }
+        clientServerName.value = this.value;
     });
     clientServerName.addEventListener('input', function() {
         if (!serverNameInput.disabled) {
@@ -859,16 +931,14 @@
     });
 
     // ============================================================
-    // 初始化
+    // 初始化界面
     // ============================================================
-    setStatus(serverChat, '点击「启动」开始监听');
-    setStatus(clientChat, '请先连接服务器');
-    clientServerName.value = 'chat-server';
-    serverNameInput.value = 'chat-server';
-    clientUserName.value = 'user-' + Math.random().toString(36).substr(2, 4);
+    setServerStatus('点击「启动」开始监听');
+    setClientStatus('请先连接服务器');
     stopServerBtn.disabled = true;
 
     console.log('✅ 界面初始化完成');
+    console.log('📌 所有节点共享同一份历史记录');
 </script>
 </body>
 </html>
