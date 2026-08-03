@@ -301,6 +301,7 @@
             background: #f8fafc;
             border-bottom: 1px solid #e2e8f0;
             display: flex;
+            flex-wrap: wrap;
             align-items: center;
             gap: 12px;
             flex-shrink: 0;
@@ -317,6 +318,19 @@
             width: 18px;
             height: 18px;
             cursor: pointer;
+        }
+        .client-toolbar .history-control {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-left: auto;
+        }
+        .client-toolbar .history-control select {
+            padding: 4px 8px;
+            border-radius: 20px;
+            border: 2px solid #d1d9e6;
+            font-size: 13px;
+            background: white;
         }
         .hidden { display: none; }
     </style>
@@ -365,8 +379,8 @@
                 <input type="text" id="clientServerName" placeholder="服务器节点名称（必填）" value="">
                 <input type="text" id="clientUserName" placeholder="你的昵称（必填）" maxlength="20" value="">
                 <div class="row">
-                    <label for="historyLimitSelect">加载历史:</label>
-                    <select id="historyLimitSelect">
+                    <label for="loginHistoryLimit">加载历史:</label>
+                    <select id="loginHistoryLimit">
                         <option value="20">20</option>
                         <option value="50" selected>50</option>
                         <option value="100">100</option>
@@ -378,12 +392,21 @@
                 <div class="error-msg" id="clientError"></div>
                 <div class="info">🌐 通过公共信令服务器 (0.peerjs.com)</div>
             </div>
-            <div class="client-toolbar">
+            <div class="client-toolbar" id="clientToolbar" style="display:none;">
                 <label>
                     <input type="checkbox" id="showSystemMsg" checked>
-                    显示加入/离开消息
+                    显示加入/离开
                 </label>
-                <span style="font-size:12px;color:#64748b;">(仅对当前会话生效)</span>
+                <div class="history-control">
+                    <span>历史:</span>
+                    <select id="historyLimitSelect">
+                        <option value="20">20</option>
+                        <option value="50" selected>50</option>
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                        <option value="500">500</option>
+                    </select>
+                </div>
             </div>
             <div class="chat-container" id="clientChatContainer">
                 <div class="status-msg">请先连接服务器</div>
@@ -400,9 +423,11 @@
     // ============================================================
     // 全局配置
     // ============================================================
-    const STORAGE_KEY = 'peerjs_chat_history';  // 所有节点共享
-    const STORAGE_MAX = 10000;  // 最大保存 10000 条
+    const STORAGE_KEY = 'peerjs_chat_history';
+    const STORAGE_MAX = 10000;
     const DEFAULT_HISTORY_LIMIT = 50;
+    const PING_INTERVAL = 15000;   // 15秒
+    const PONG_TIMEOUT = 30000;    // 30秒
 
     // ============================================================
     // 历史消息操作（共享存储）
@@ -419,10 +444,7 @@
     function addHistory(sender, content, timestamp, time) {
         const h = getHistory();
         h.push({ sender, content, timestamp, time });
-        // 如果超出最大存储，删除最早的 1000 条
-        if (h.length > STORAGE_MAX) {
-            h.splice(0, 1000);
-        }
+        if (h.length > STORAGE_MAX) h.splice(0, 1000);
         saveHistory(h);
     }
     function getRecent(limit = DEFAULT_HISTORY_LIMIT) {
@@ -462,7 +484,9 @@
     const clientMsgInput = document.getElementById('clientMsgInput');
     const clientSendBtn = document.getElementById('clientSendBtn');
     const showSystemMsg = document.getElementById('showSystemMsg');
+    const loginHistoryLimit = document.getElementById('loginHistoryLimit');
     const historyLimitSelect = document.getElementById('historyLimitSelect');
+    const clientToolbar = document.getElementById('clientToolbar');
 
     // ============================================================
     // 客户端消息渲染
@@ -535,11 +559,12 @@
     }
 
     // ============================================================
-    // 服务器逻辑
+    // 服务器逻辑（含心跳检测）
     // ============================================================
     let serverPeer = null;
-    let serverConnections = new Map();
+    let serverConnections = new Map(); // peerId -> { conn, userName, lastPong }
     let serverStarted = false;
+    let heartbeatTimer = null;
 
     function updateServerUI() {
         onlineCount.textContent = serverConnections.size;
@@ -560,6 +585,46 @@
             try { info.conn.send(json); count++; } catch (e) { console.warn('发送失败', e); }
         }
         console.log(`📤 广播给 ${count} 个客户端`);
+    }
+
+    // 心跳检测
+    function startHeartbeat() {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+        heartbeatTimer = setInterval(() => {
+            const now = Date.now();
+            const toRemove = [];
+            for (const [pid, info] of serverConnections) {
+                // 发送 ping
+                try {
+                    info.conn.send(JSON.stringify({ type: 'ping' }));
+                } catch (e) {
+                    toRemove.push(pid);
+                    continue;
+                }
+                // 检查是否超时
+                if (info.lastPong && (now - info.lastPong) > PONG_TIMEOUT) {
+                    toRemove.push(pid);
+                }
+            }
+            for (const pid of toRemove) {
+                if (serverConnections.has(pid)) {
+                    const info = serverConnections.get(pid);
+                    console.log(`⏹ 客户端 ${info.userName} (${pid}) 心跳超时，断开`);
+                    try { info.conn.close(); } catch (e) {}
+                    serverConnections.delete(pid);
+                    // 广播离开（但可能已经断开了，不广播）
+                    // 但为了不产生僵尸，不广播离开消息（因为可能对方已无连接）
+                    updateServerUI();
+                }
+            }
+        }, PING_INTERVAL);
+    }
+
+    function stopHeartbeat() {
+        if (heartbeatTimer) {
+            clearInterval(heartbeatTimer);
+            heartbeatTimer = null;
+        }
     }
 
     function startServer() {
@@ -596,6 +661,8 @@
             serverMsgInput.disabled = false;
             serverSendBtn.disabled = false;
             setServerStatus('服务器已启动，等待客户端连接...');
+            // 启动心跳
+            startHeartbeat();
         });
 
         serverPeer.on('connection', (conn) => {
@@ -606,12 +673,19 @@
             const handler = (data) => {
                 try {
                     const msg = JSON.parse(data);
+                    // 处理 pong
+                    if (msg.type === 'pong') {
+                        if (serverConnections.has(conn.peer)) {
+                            serverConnections.get(conn.peer).lastPong = Date.now();
+                        }
+                        return;
+                    }
+
                     if (msg.type === 'login' && !loggedIn) {
                         userName = msg.userName || '匿名用户';
-                        // 获取客户端请求的历史条数，默认50
                         const limit = parseInt(msg.history_limit) || DEFAULT_HISTORY_LIMIT;
                         loggedIn = true;
-                        serverConnections.set(conn.peer, { conn, userName });
+                        serverConnections.set(conn.peer, { conn, userName, lastPong: Date.now() });
                         updateServerUI();
 
                         conn.send(JSON.stringify({
@@ -620,13 +694,11 @@
                             content: `✅ 连接到 ${name}`
                         }));
 
-                        // 推送历史（根据客户端请求的数量）
                         const history = getRecent(limit);
                         if (history.length) {
                             conn.send(JSON.stringify({ type: 'history', messages: history }));
                         }
 
-                        // 广播加入并存储
                         const sysMsg = `🟢 ${userName} 加入了聊天室`;
                         const ts = fmtTimestamp();
                         const tm = fmtTime();
@@ -634,6 +706,12 @@
                         broadcast('系统', sysMsg, ts, tm, conn.peer);
                         renderServerMsg('系统', sysMsg, tm, false, true);
                         updateServerUI();
+                    }
+                    else if (msg.type === 'request_history' && loggedIn) {
+                        // 客户端请求重新加载历史
+                        const newLimit = parseInt(msg.limit) || DEFAULT_HISTORY_LIMIT;
+                        const history = getRecent(newLimit);
+                        conn.send(JSON.stringify({ type: 'history', messages: history }));
                     }
                     else if (msg.type === 'text' && loggedIn) {
                         const content = msg.content.trim();
@@ -674,6 +752,7 @@
                 stopServerBtn.disabled = true;
                 serverStarted = false;
                 serverNameInput.disabled = false;
+                stopHeartbeat();
             } else {
                 serverStatusBadge.textContent = '❌ 错误';
                 serverStatusBadge.className = 'status-badge error';
@@ -699,6 +778,7 @@
         }
 
         console.log('⏹ 停止服务器...');
+        stopHeartbeat();
         for (const [pid, info] of serverConnections) {
             try { info.conn.close(); } catch (e) {}
         }
@@ -769,6 +849,7 @@
         clientSendBtn.disabled = true;
         clearClientMessages();
         setClientStatus('🔄 连接中...');
+        clientToolbar.style.display = 'none';
 
         const cid = 'client-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6);
         clientPeer = new Peer(cid, {
@@ -782,7 +863,6 @@
 
             clientConn.on('open', () => {
                 console.log('P2P 连接已建立');
-                // 登录时发送用户名和请求的历史数量
                 clientConn.send(JSON.stringify({
                     type: 'login',
                     userName: userName,
@@ -800,12 +880,14 @@
                 clientSendBtn.disabled = true;
                 setClientStatus('🔌 连接已断开');
                 document.getElementById('clientLoginArea').style.display = 'block';
+                clientToolbar.style.display = 'none';
             });
 
             clientConn.on('error', (err) => {
                 console.error('连接错误:', err);
                 showClientError('连接错误: ' + err.message);
                 document.getElementById('clientLoginArea').style.display = 'block';
+                clientToolbar.style.display = 'none';
             });
         });
 
@@ -819,6 +901,7 @@
                 setClientStatus('❌ 连接失败');
             }
             document.getElementById('clientLoginArea').style.display = 'block';
+            clientToolbar.style.display = 'none';
         });
     }
 
@@ -830,6 +913,9 @@
                 clientMsgInput.disabled = false;
                 clientSendBtn.disabled = false;
                 document.getElementById('clientLoginArea').style.display = 'none';
+                clientToolbar.style.display = 'flex';
+                // 同步下拉框值
+                historyLimitSelect.value = loginHistoryLimit.value;
                 clearClientMessages();
                 const container = clientChat;
                 const div = document.createElement('div');
@@ -842,6 +928,8 @@
                 container.appendChild(div2);
                 break;
             case 'history':
+                // 替换当前所有消息
+                clientAllMessages = [];
                 if (msg.messages && msg.messages.length) {
                     for (const m of msg.messages) {
                         clientAllMessages.push({
@@ -851,8 +939,8 @@
                             isMine: (m.sender === clientMyName)
                         });
                     }
-                    renderClientMessages();
                 }
+                renderClientMessages();
                 break;
             case 'text':
                 if (msg.sender === clientMyName) return;
@@ -873,6 +961,12 @@
                 });
                 renderClientMessages();
                 break;
+            case 'ping':
+                // 回复 pong
+                if (clientConn) {
+                    clientConn.send(JSON.stringify({ type: 'pong' }));
+                }
+                break;
             default: break;
         }
     }
@@ -882,6 +976,15 @@
         el.textContent = '❌ ' + msg;
         el.style.display = 'block';
         setTimeout(() => { el.style.display = 'none'; }, 5000);
+    }
+
+    // 请求重新加载历史
+    function requestHistory(limit) {
+        if (!clientConnected || !clientConn) return;
+        clientConn.send(JSON.stringify({
+            type: 'request_history',
+            limit: limit
+        }));
     }
 
     // ============================================================
@@ -923,7 +1026,7 @@
     clientConnectBtn.addEventListener('click', function() {
         const server = clientServerName.value.trim();
         const userName = clientUserName.value.trim();
-        const limit = parseInt(historyLimitSelect.value) || DEFAULT_HISTORY_LIMIT;
+        const limit = parseInt(loginHistoryLimit.value) || DEFAULT_HISTORY_LIMIT;
         if (!server) { showClientError('请输入服务器节点名称'); clientServerName.focus(); return; }
         if (!userName) { showClientError('请输入你的昵称'); clientUserName.focus(); return; }
         if (userName.length > 20) { showClientError('昵称最长20位'); return; }
@@ -947,8 +1050,20 @@
         if (e.key === 'Enter') { e.preventDefault(); clientSendBtn.click(); }
     });
 
+    // 显示/隐藏系统消息
     showSystemMsg.addEventListener('change', function() {
         renderClientMessages();
+    });
+
+    // 历史条数改变时重新请求
+    historyLimitSelect.addEventListener('change', function() {
+        const limit = parseInt(this.value) || DEFAULT_HISTORY_LIMIT;
+        requestHistory(limit);
+    });
+
+    // 登录界面的历史条数变化时同步到工具栏下拉框（但不触发请求）
+    loginHistoryLimit.addEventListener('change', function() {
+        historyLimitSelect.value = this.value;
     });
 
     // ============================================================
@@ -969,9 +1084,11 @@
     setServerStatus('点击「启动」开始监听');
     setClientStatus('请先连接服务器');
     stopServerBtn.disabled = true;
+    clientToolbar.style.display = 'none';
 
     console.log('✅ 界面初始化完成');
-    console.log('📌 历史消息最多保存 ' + STORAGE_MAX + ' 条，客户端可自定义加载数量');
+    console.log('📌 服务器已添加心跳检测 (ping/pong)');
+    console.log('📌 客户端登录后可动态调整历史条数');
 </script>
 </body>
 </html>
