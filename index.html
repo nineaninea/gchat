@@ -6,6 +6,7 @@
     <title>💬 PeerJS 节点 (二合一)</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
+        /* ... 样式与之前相同，不变 ... */
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: system-ui, sans-serif;
@@ -82,7 +83,6 @@
         }
         .tab-pane.active { display: flex; }
 
-        /* 服务器面板 */
         .server-controls {
             padding: 12px 20px;
             background: #f1f5f9;
@@ -304,7 +304,6 @@
     <div class="tab-content">
         <!-- 服务器面板 -->
         <div class="tab-pane active" id="serverPane">
-            <!-- 控制栏：名称 + 启动/停止 -->
             <div class="server-controls">
                 <input type="text" id="serverNameInput" placeholder="服务器节点名称" value="chat-server">
                 <div class="btn-group">
@@ -312,7 +311,6 @@
                     <button class="btn-danger" id="stopServerBtn" disabled>⏹ 停止</button>
                 </div>
             </div>
-            <!-- 状态栏 -->
             <div class="server-status">
                 <span><span class="label">节点 ID:</span> <span class="value" id="serverNodeId">—</span></span>
                 <span><span class="label">状态:</span> <span class="status-badge off" id="serverStatusBadge">未启动</span></span>
@@ -354,6 +352,8 @@
     // ============================================================
     const STORAGE_KEY = 'peerjs_chat_history';
     const MAX_HISTORY = 50;
+    const HEARTBEAT_INTERVAL = 10000; // 10秒发送一次 ping
+    const HEARTBEAT_TIMEOUT = 30000;  // 30秒无响应则踢出
 
     // ============================================================
     // 工具函数
@@ -379,7 +379,6 @@
     const panes = { server: document.getElementById('serverPane'), client: document.getElementById('clientPane') };
     const modeBadge = document.getElementById('modeBadge');
 
-    // 服务器
     const serverNameInput = document.getElementById('serverNameInput');
     const startServerBtn = document.getElementById('startServerBtn');
     const stopServerBtn = document.getElementById('stopServerBtn');
@@ -391,7 +390,6 @@
     const serverMsgInput = document.getElementById('serverMsgInput');
     const serverSendBtn = document.getElementById('serverSendBtn');
 
-    // 客户端
     const clientServerName = document.getElementById('clientServerName');
     const clientUserName = document.getElementById('clientUserName');
     const clientConnectBtn = document.getElementById('clientConnectBtn');
@@ -436,11 +434,13 @@
     }
 
     // ============================================================
-    // 服务器逻辑
+    // 服务器逻辑（改进）
     // ============================================================
     let serverPeer = null;
-    let serverConnections = new Map(); // peerId -> { conn, userName }
+    let serverConnections = new Map(); // peerId -> { conn, userName, lastPong }
     let serverStarted = false;
+    let heartbeatTimer = null;
+    let serverName = '';
 
     function updateServerUI() {
         onlineCount.textContent = serverConnections.size;
@@ -463,10 +463,55 @@
         console.log(`📤 广播给 ${count} 个客户端`);
     }
 
+    function startHeartbeat() {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+        heartbeatTimer = setInterval(() => {
+            const now = Date.now();
+            const toRemove = [];
+            // 发送 ping
+            for (const [pid, info] of serverConnections) {
+                try {
+                    info.conn.send(JSON.stringify({ type: 'ping' }));
+                } catch (e) {
+                    // 发送失败，可能已断开
+                    toRemove.push(pid);
+                }
+            }
+            // 检查超时
+            for (const [pid, info] of serverConnections) {
+                if (info.lastPong && (now - info.lastPong) > HEARTBEAT_TIMEOUT) {
+                    toRemove.push(pid);
+                }
+            }
+            // 移除超时或发送失败的客户端
+            toRemove.forEach(pid => {
+                if (serverConnections.has(pid)) {
+                    const info = serverConnections.get(pid);
+                    console.log(`⏰ 客户端 ${info.userName} (${pid}) 心跳超时，断开`);
+                    try { info.conn.close(); } catch (e) {}
+                    serverConnections.delete(pid);
+                    // 广播离开消息
+                    const leave = `🔴 ${info.userName} 因超时离开聊天室`;
+                    addHistory('系统', leave, fmtTimestamp(), fmtTime());
+                    broadcast('系统', leave, fmtTimestamp(), fmtTime());
+                    renderMsg(serverChat, '系统', leave, fmtTime(), false, true);
+                    updateServerUI();
+                }
+            });
+        }, HEARTBEAT_INTERVAL);
+    }
+
+    function stopHeartbeat() {
+        if (heartbeatTimer) {
+            clearInterval(heartbeatTimer);
+            heartbeatTimer = null;
+        }
+    }
+
     function startServer() {
         if (serverStarted) return;
-        const name = serverNameInput.value.trim();
-        if (!name) { alert('请输入服务器节点名称'); return; }
+        serverName = serverNameInput.value.trim();
+        if (!serverName) { alert('请输入服务器节点名称'); return; }
 
         if (serverPeer) { serverPeer.destroy(); serverPeer = null; }
 
@@ -478,7 +523,7 @@
         serverStatusBadge.textContent = '注册中...';
         serverStatusBadge.className = 'status-badge off';
 
-        serverPeer = new Peer(name, {
+        serverPeer = new Peer(serverName, {
             debug: 2,
             config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] }
         });
@@ -493,6 +538,8 @@
             serverMsgInput.disabled = false;
             serverSendBtn.disabled = false;
             setStatus(serverChat, '服务器已启动，等待客户端连接...');
+            // 启动心跳
+            startHeartbeat();
         });
 
         serverPeer.on('connection', (conn) => {
@@ -503,17 +550,30 @@
             const handler = (data) => {
                 try {
                     const msg = JSON.parse(data);
+                    // 处理心跳回复
+                    if (msg.type === 'pong') {
+                        if (serverConnections.has(conn.peer)) {
+                            serverConnections.get(conn.peer).lastPong = Date.now();
+                        }
+                        return;
+                    }
+
                     if (msg.type === 'login' && !loggedIn) {
                         userName = msg.userName || '匿名用户';
                         loggedIn = true;
-                        serverConnections.set(conn.peer, { conn, userName });
+                        // 如果已存在相同 peerId，先移除旧记录
+                        if (serverConnections.has(conn.peer)) {
+                            // 可能有重复，先清理
+                            serverConnections.delete(conn.peer);
+                        }
+                        serverConnections.set(conn.peer, { conn, userName, lastPong: Date.now() });
                         updateServerUI();
 
                         // 登录成功
                         conn.send(JSON.stringify({
                             type: 'login_success',
-                            serverName: name,
-                            content: `✅ 连接到 ${name}`
+                            serverName: serverName,
+                            content: `✅ 连接到 ${serverName}`
                         }));
 
                         // 推送历史
@@ -583,6 +643,7 @@
     function stopServer() {
         if (!serverStarted || !serverPeer) return;
         console.log('⏹ 停止服务器...');
+        stopHeartbeat();
         // 断开所有客户端
         for (const [pid, info] of serverConnections) {
             try { info.conn.close(); } catch (e) {}
@@ -592,7 +653,6 @@
         serverPeer = null;
         serverStarted = false;
 
-        // 重置 UI
         serverNodeId.textContent = '—';
         serverStatusBadge.textContent = '已停止';
         serverStatusBadge.className = 'status-badge off';
@@ -607,7 +667,7 @@
     }
 
     // ============================================================
-    // 客户端逻辑
+    // 客户端逻辑（修复消息重复）
     // ============================================================
     let clientPeer = null;
     let clientConn = null;
@@ -638,7 +698,18 @@
             });
 
             clientConn.on('data', (data) => {
-                try { handleClientMessage(JSON.parse(data)); } catch (e) { console.error('解析失败:', e); }
+                try {
+                    const msg = JSON.parse(data);
+                    // 处理心跳
+                    if (msg.type === 'ping') {
+                        // 回复 pong
+                        if (clientConn && clientConn.open) {
+                            clientConn.send(JSON.stringify({ type: 'pong' }));
+                        }
+                        return;
+                    }
+                    handleClientMessage(msg);
+                } catch (e) { console.error('解析失败:', e); }
             });
 
             clientConn.on('close', () => {
@@ -670,6 +741,10 @@
     }
 
     function handleClientMessage(msg) {
+        // 忽略自己发送的消息（由本地直接显示，避免重复）
+        if (msg.sender === clientMyName) {
+            return;
+        }
         switch (msg.type) {
             case 'login_success':
                 clientConnected = true;
@@ -685,6 +760,7 @@
                 if (msg.messages && msg.messages.length) {
                     renderMsg(clientChat, '系统', `📜 加载 ${msg.messages.length} 条历史`, fmtTime(), false, true);
                     msg.messages.forEach(m => {
+                        // 历史消息如果包含自己的，也正常显示（因为历史中可能包含自己之前发的，但那是过去的，可显示）
                         const isMine = (m.sender === clientMyName);
                         const isSystem = (m.sender === '系统');
                         renderMsg(clientChat, m.sender, m.content, m.time, isMine, isSystem);
@@ -769,21 +845,21 @@
     });
 
     // ============================================================
-    // 同步服务器名称到客户端默认值（方便使用）
+    // 双向同步服务器名称
     // ============================================================
     serverNameInput.addEventListener('input', function() {
-        // 同步到客户端的默认服务器名称输入框
-        clientServerName.value = this.value;
+        if (!serverNameInput.disabled) {
+            clientServerName.value = this.value;
+        }
     });
     clientServerName.addEventListener('input', function() {
-        // 反向同步（但服务器正在运行时不允许修改，已禁用）
         if (!serverNameInput.disabled) {
             serverNameInput.value = this.value;
         }
     });
 
     // ============================================================
-    // 初始化界面
+    // 初始化
     // ============================================================
     setStatus(serverChat, '点击「启动」开始监听');
     setStatus(clientChat, '请先连接服务器');
